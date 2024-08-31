@@ -176,18 +176,196 @@ void printf(const char *fmt, ...)
     va_end(vargs);
 }
 /**
+ * @brief トラップハンドラ処理
+ * @param なし
+ * @details CPUがエラーや特別な状況を検知したときに、それをOSに通知して適切に処理するための仕組み
+ */
+__attribute__((aligned(4))) /* アライメントを４バイト境界でスタックの割り当て */
+void
+trap_handler(void)
+{
+    unsigned int scause = 0; // 例外や割り込み時の原因
+    unsigned int sepc = 0;   // 例外や割り込み時のプログラムカウンタ
+
+    /*
+        インラインアセンブラとは
+        オペコードは、アセンブリの命令名、オペランドは、アセンブリ命令の引数を示します。
+        出力オペランドは、アセンブリコードが結果を格納する場所を指定します。
+        "=r"(var) のように、=rでレジスタを使用し、varに格納できます。
+        なお、r(レジスタに結果を書き込む), +(オペランドが入力でも出力でもある), -(通常は使用しない)があります。
+        入力オペランドは、アセンブリコードに渡される入力値を指定します。
+        "r"(var) で、varの値がレジスタに格納されてアセンブリコードに渡されます。
+        なお、r(レジスタオペランド)、m（メモリ）,i（即値）,n（整数定数）,g（汎用オペランド）があります。
+        __asm__ (
+          ”オペコード オペランド1, オペランド2, ... ,"    <アセンブリテンプレート : ％0,%1...は、％番目の出力/入力オペランドで指定したレジスタを示す>
+        : "制約"(C言語中の変数名)                       <出力オペランド : レジスタの値をC言語の変数へ出力するもの。通常は、"＝r"を指定する>
+        : "制約"(C言語中の変数名)                       <入力オペランド : C言語の変数をレジスタに設定する。”r”を指定しなければならない>
+        :  破壊されるレジスタのリスト                    <レジスタの値が変更されてしまい、影響を与えてしまう項目>
+    */
+
+    // 例外や割り込みが発生すると、scauseレジスタにはその原因を示すビットがセットされる
+    // sepcレジスタは、例外や割り込みが発生した際のプログラムカウンタ（PC）の値を保持される
+    __asm__ __volatile__(
+        "csrr %0, scause\n"        /* %0にscauseレジスタの内容を読み込む */
+        "csrr %1, sepc\n"          /* %1にsepcレジスタの内容を読み込む */
+        : "=r"(scause), "=r"(sepc) /* 上記の結果をC言語の変数scauseとsepcに書き込む */
+    );
+    printf("trap: scause = 0x%x, sepc = 0x%x\n", scause, sepc);
+    for (;;)
+        ;
+}
+/**
+ * @brief コンテキストスッチの処理
+ * @param prev_sp   : 前回のスタックポインタ
+ * @param next_sp   : 次回のスタック
+ * @details 現在のレジスタの状態を保存し、新しいスタックポインタに切り替えてから、以前の状態を復元します。
+ */
+__attribute__((naked)) /* 通常の関数処理を無効化 (関数が通常の関数呼び出しや戻り処理をしない) */
+void
+switch_context(unsigned int *prev_sp, unsigned int next_sp)
+{
+    /*
+        switch_contextが呼ばれると、a0/a1レジスタにprev_sp/next_spが設定され、
+        スタックポインタの位置の更新、フレームポインタの設定などが行われます。
+    */
+    __asm__ __volatile__(
+        /* 新しいスタックフレームを作成して、レジスタの値を保存する領域を作る */
+        "addi sp, sp, -13 * 4 \n"
+        /* レジスタの値をスタック(メモリ)に保存 (レジスタの保存) */
+        /* s1からs11の保存レジスタは、関数の呼び出し間でデータを保持するもので、関数をまたいでもその値が保持される */
+        "sw ra,   0 * 4(sp)\n" /* 現在のspの位置にリターンアドレスを保存 */
+        "sw s0,   1 * 4(sp)\n" /* 現在のspの位置から4バイトずらした位置にフレームポインタを保存 */
+        "sw s1,   2 * 4(sp)\n" /* 現在のspの位置から8バイトずらした位置に保存レジスタを保存 */
+        "sw s2,   3 * 4(sp)\n" /* 現在のspの位置から12バイトずらした位置に保存レジスタを保存 */
+        "sw s3,   4 * 4(sp)\n" /* 現在のspの位置から16バイトずらした位置に保存レジスタを保存 */
+        "sw s4,   5 * 4(sp)\n" /* 現在のspの位置から20バイトずらした位置に保存レジスタを保存 */
+        "sw s5,   6 * 4(sp)\n" /* 現在のspの位置から24バイトずらした位置に保存レジスタを保存 */
+        "sw s6,   7 * 4(sp)\n" /* 現在のspの位置から28バイトずらした位置に保存レジスタを保存 */
+        "sw s7,   8 * 4(sp)\n" /* 現在のspの位置から32バイトずらした位置に保存レジスタを保存 */
+        "sw s8,   9 * 4(sp)\n" /* 現在のspの位置から36バイトずらした位置に保存レジスタを保存 */
+        "sw s9,  10 * 4(sp)\n" /* 現在のspの位置から40バイトずらした位置に保存レジスタを保存 */
+        "sw s10, 11 * 4(sp)\n" /* 現在のspの位置から44バイトずらした位置に保存レジスタを保存 */
+        "sw s11, 12 * 4(sp)\n" /* 現在のspの位置から48バイトずらした位置に保存レジスタを保存 */
+        /* 現在のスタックポインタの位置をa0が指すアドレスに保存 */
+        /* a0は、関数呼び出しの第1引数であり、prev_spをとなる */
+        "sw sp,  (a0)\n"
+        /* a1が指すデータを現在のスタックポインタにする */
+        /*
+            a1は、関数呼び出しの第2引数であり、next_spをとなる
+            next_spのスタックのアドレスをレジスタのスタックポインタに設定する
+            ここからnext_spのスタックをレジスタが処理する
+        */
+        "mv sp,  a1\n"
+        /* ここから、next_spのスタックに保存していた値をレジスタにロード (レジスタの復元) */
+        "lw ra,   0 * 4(sp)\n" /* 現在のsp位置のデータをリターンアドレスに設定 */
+        "lw s0,   1 * 4(sp)\n" /* 現在のsp位置から4バイト先のデータをフレームポインタに設定 */
+        "lw s1,   2 * 4(sp)\n" /* 現在のsp位置から8バイト先のデータを保存レジスタに設定 */
+        "lw s2,   3 * 4(sp)\n" /* 現在のsp位置から12バイト先のデータを保存レジスタに設定 */
+        "lw s3,   4 * 4(sp)\n" /* 現在のsp位置から16バイト先のデータを保存レジスタに設定 */
+        "lw s4,   5 * 4(sp)\n" /* 現在のsp位置から20バイト先のデータを保存レジスタに設定 */
+        "lw s5,   6 * 4(sp)\n" /* 現在のsp位置から24バイト先のデータを保存レジスタに設定 */
+        "lw s6,   7 * 4(sp)\n" /* 現在のsp位置から28バイト先のデータを保存レジスタに設定 */
+        "lw s7,   8 * 4(sp)\n" /* 現在のsp位置から32バイト先のデータを保存レジスタに設定 */
+        "lw s8,   9 * 4(sp)\n" /* 現在のsp位置から36バイト先のデータを保存レジスタに設定 */
+        "lw s9,  10 * 4(sp)\n" /* 現在のsp位置から40バイト先のデータを保存レジスタに設定 */
+        "lw s10, 11 * 4(sp)\n" /* 現在のsp位置から44バイト先のデータを保存レジスタに設定 */
+        "lw s11, 12 * 4(sp)\n" /* 現在のsp位置から48バイト先のデータを保存レジスタに設定 */
+        /* スタックポインタの位置を戻す */
+        "addi sp, sp, 13 * 4 \n"
+        /* 終了 */
+        "ret\n");
+}
+/**
+ * @brief スレッド
+ * @note
+ */
+struct thread
+{
+    unsigned int sp;  // スレッドのスタックポインタ
+    char stack[8149]; // スレッドのスタック領域
+};
+/**
+ * @brief スレッド(グローバル変数)
+ * @note
+ */
+struct thread thread1;
+struct thread thread2;
+/**
+ * @brief スレッドの初期化処理
+ * @param thread                : 前回のスタックポインタ
+ * @param void (*entry)(void)   : 次回のスタックポインタ
+ * @details 詳細説明
+ */
+void init_thread(struct thread *thread, void (*entry)(void))
+{
+    unsigned int *sp = (unsigned int *)&thread->stack[sizeof(thread->stack) / sizeof(thread->stack[0])];
+    *--sp = 0;                   // s11
+    *--sp = 0;                   // s10
+    *--sp = 0;                   // s9
+    *--sp = 0;                   // s8
+    *--sp = 0;                   // s7
+    *--sp = 0;                   // s6
+    *--sp = 0;                   // s5
+    *--sp = 0;                   // s4
+    *--sp = 0;                   // s3
+    *--sp = 0;                   // s2
+    *--sp = 0;                   // s1
+    *--sp = 0;                   // s0
+    *--sp = (unsigned int)entry; // ra
+    // スタックポインタのアドレスを設定
+    thread->sp = (unsigned int)sp;
+}
+/**
+ * @brief スレッド1の処理
+ * @details 詳細説明
+ */
+void thread1_entry(void)
+{
+    for (int i = 0; i < 10; i++)
+    {
+        printf("%d thread1 -> thread2 \n", i);
+        switch_context(&thread1.sp, thread2.sp);
+        for (int j = 8149; (thread1.stack[j - 1] != 0); j--)
+            printf("(thread1)sp=0x%x stack%d:0x%x(0x%x)\n", thread1.sp, j, thread1.stack[j - 1], &thread1.stack[j - 1]);
+    }
+}
+/**
+ * @brief スレッド2の処理
+ * @details 詳細説明
+ */
+void thread2_entry(void)
+{
+    for (int i = 0; i < 10; i++)
+    {
+        printf("%d thread2 -> thread1 \n", i);
+        switch_context(&thread2.sp, thread1.sp);
+        for (int j = 8149; (thread2.stack[j - 1] != 0); j--)
+            printf("(thread2)sp=0x%x stack%d:0x%x(0x%x)\n", thread2.sp, j, thread2.stack[j - 1], &thread2.stack[j - 1]);
+    }
+}
+/**
  * @brief カーネルメイン処理
  * @param なし
  * @details 詳細説明
  */
 void kernel_main(void)
 {
+    // RISC-Vアーキテクチャにおけるトラップハンドラの設定
+    __asm__ __volatile__(
+        "csrw stvec, %0\n"  /* stvecレジスタにトラップハンドラのアドレスを設定 */
+        ::"r"(trap_handler) /* 入力オペランド: トラップハンドラのアドレス */
+    );
     // Hellow Worldの表示
     printf("Hello World\n");
     // printf機能の確認
     printf("0x%x\n", 0x1234abcd);
     printf("%d\n", 999999);
     printf("%d\n", -999999);
+    // スレッドの初期化
+    init_thread(&thread1, thread1_entry);
+    init_thread(&thread2, thread2_entry);
+    // スレッド1の起動
+    thread1_entry();
     // 無限ループ
     for (;;)
         ;

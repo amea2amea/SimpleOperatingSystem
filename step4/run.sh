@@ -10,11 +10,6 @@ set -xue
 
 #### コンパイルの設定 ####
 # kernel.cをコンパイルし、(-Tオプション)のリンカスクリプト(kernel.ld)を渡して(-Wlオプション)、ELF形式のファイルを作成
-# -02 : 最適化レベル2
-# -g3 : デバッグ情報
-# -Wall -Wextra : 警告
-# -ffreestanding : 標準ライブラリを使用しない環境でのコンパイル
-# -nostdlib : 標準ライブラリを使用しない設定
 # -T<script>: <script>をリンカスクプトとして使用
 # -Wl,<arg> : リンカにカンマ区切りの引数を渡す。今回の場合、kernel.ld
 CC=/opt/homebrew/opt/llvm/bin/clang

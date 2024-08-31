@@ -20,6 +20,7 @@ $CC $CFLAGS -Wl,-Tkernel.ld -o kernel.elf kernel.c
 # qemuの起動:デフォルトのbios起動(OpenSBI)で実施
 # ターミナルにシリアルコンソールとQEMU monitorを表示
 # "ctrl-a c"でコンソールとモニタの切り替えが可能
+# "ctrl-a x"で強制停止
 # qemuの終了: "(qemu) q"
 qemu-system-riscv32 -machine virt -bios default -nographic -serial mon:stdio \
  -kernel kernel.elf
