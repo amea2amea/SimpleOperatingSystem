@@ -11,6 +11,7 @@ set -xue
 #### qemuの設定・操作 ####
 # qemuの起動:デフォルトのbios起動(OpenSBI)で実施
 # ターミナルにシリアルコンソールとQEMU monitorを表示
+# "ctrl-a x"で強制停止
 # "ctrl-a c"でコンソールとモニタの切り替えが可能
 # qemuの終了: "(qemu) q"
 qemu-system-riscv32 -machine virt -bios default -nographic -serial mon:stdio

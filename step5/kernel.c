@@ -2,7 +2,9 @@
  * @brief 各種定義
  * @note
  */
-#define STACK_SIZE 8149 // スタックサイズ
+#define NULL ((void *)0) // ヌルポインタ
+#define STACK_SIZE 8149  // スタックサイズ
+#define THREAD_MAX_NUM 8 // スレッドの最大数
 /**
  * @brief SBI(Supervisor Binary Interface)の戻り値
  * @note スーパーバイザ (S モード OS) とスーパーバイザ間のシステム コール形式の呼び出し規則
@@ -281,29 +283,74 @@ switch_context(unsigned int *prev_sp, unsigned int *next_sp)
         "ret\n");
 }
 /**
+ * @brief 実行状態の定義
+ * @note スレッドやプロセスの状態を示す
+ */
+typedef enum
+{
+    READY,     // 実行可能プロセス
+    RUNNING,   // 実行中
+    WAITING,   // 実行待ち
+    TERMINATED // ターミネート(終了状態/未設定状態)
+} ExecutionState;
+/**
+ * @brief 実行管理エンティティを示す構造体
+ * @note スレッドやプロセスの状態とIDを管理する
+ */
+typedef struct
+{
+    ExecutionState status; // 状態
+    int id;                // ID (プロセスやスレッドの識別)
+} Execution;
+/**
  * @brief スレッド
  * @note
  */
 struct thread
 {
+    Execution execution;    // 実行管理エンティティ
     unsigned int sp;        // スレッドのスタックポインタ
     char stack[STACK_SIZE]; // スレッドのスタック領域
 };
 /**
  * @brief スレッド(グローバル変数)
- * @note
+ * @note　各種スレッド関連のデータ
  */
-struct thread g_thread1; // スレッド1
-struct thread g_thread2; // スレッド2
+struct thread g_thread_list[THREAD_MAX_NUM]; // スレッド
+struct thread *g_idle_thread;                // アイドル(何もしない)スレッド
+struct thread *g_current_thread;             // 現在実行中のスレッド
 /**
- * @brief スレッドの初期化処理
- * @param thread                : スレッドのポインタ
- * @param void (*entry)(void)   : スレッドのエントリー関数のポインタ
- * @details RISC-Vのレジスタをアーキテクチャの仕様にあわせて設定していく。
- *          raをエントリー関数に設定しておき、飛べるようにしてある
+ * @brief スレッドリストの初期設定
+ * @details グローバルのスレッドリストの情報を初期化する
  */
-void init_thread(struct thread *thread, void (*entry)(void))
+void init_threads(void)
 {
+    for (int i = 0; i < THREAD_MAX_NUM; i++)
+    {
+        g_thread_list[i].execution.id = 0;
+        g_thread_list[i].execution.status = TERMINATED;
+    }
+    return;
+}
+/**
+ * @brief スレッドの作成
+ * @param void (*entry)(void)   : スレッドのエントリー関数のポインタ
+ * @details スレッドリストにスレッドを設定し、スレッドを使用可能な状態にする
+ */
+struct thread *create_thread(void (*entry)(void))
+{
+    // 空いているスレッドを探す
+    struct thread *thread = NULL;
+    int i = 0;
+    for (i = 0; i < THREAD_MAX_NUM; i++)
+    {
+        if (g_thread_list[i].execution.status == TERMINATED)
+        {
+            thread = &g_thread_list[i];
+            break;
+        }
+    }
+    // コンテキストスイッチ用のレジスタの初期設定
     unsigned int *sp = (unsigned int *)&thread->stack[sizeof(thread->stack) / sizeof(thread->stack[0])];
     *--sp = 0;                   // s11
     *--sp = 0;                   // s10
@@ -318,51 +365,106 @@ void init_thread(struct thread *thread, void (*entry)(void))
     *--sp = 0;                   // s1
     *--sp = 0;                   // s0
     *--sp = (unsigned int)entry; // ra
-    // スタックポインタのアドレスを設定
+    // スレッドの初期設定
+    thread->execution.id = i + 1;
+    thread->execution.status = READY;
     thread->sp = (unsigned int)sp;
     printf("thread(sp:0x%x) 0x%x\n", thread->sp, &thread->stack[STACK_SIZE - 1]);
+    return thread;
 }
 /**
- * @brief スレッド1のエントリー関数処理
- * @details スレッド1で実施する処理内容
+ * @brief 全てのスレッドが終了状態であるかどうか
+ * @retval  0   :   動作中のスレッドあり
+ * @retval  1   :   全てのスレッドが終了状態である
+ * @details 詳細説明
  */
-void entry_thread1(void)
+int are_all_threads_terminated(void)
+{
+    // 全スレッドの状態をチェック
+    for (int i = 0; i < THREAD_MAX_NUM; i++)
+    {
+        if ((g_thread_list[i].execution.status != TERMINATED) && (g_thread_list[i].execution.id > 0))
+        {
+            return 0; // まだ動作中のスレッドがある
+        }
+    }
+    return 1; // 全スレッドが終了している
+}
+/**
+ * @brief スレッドスケジューラ
+ * @details 現在のスレッドを休ませて、次に動作するスレッドを探索し、スレッドを動作させる
+ *          スレッドの切り替えを行うスケジュール関数
+ */
+void schedule_threads(void)
+{
+    struct thread *next = NULL;
+
+    // 次に動作するスレッドを探す
+    for (int i = 0; i < THREAD_MAX_NUM; i++)
+    {
+        struct thread *thread = &g_thread_list[(g_current_thread->execution.id + i) % THREAD_MAX_NUM];
+        if ((thread->execution.status == READY) && (thread->execution.id > 0))
+        {
+            thread->execution.status = RUNNING;
+            next = thread;
+            break;
+        }
+    }
+    // 実行可能なスレッドがない場合は、アイドルスレッドに設定
+    if (next == NULL)
+    {
+        g_idle_thread->execution.status = RUNNING;
+        next = g_idle_thread;
+    }
+    // コンテキストスイッチを行う
+    struct thread *prev = g_current_thread;
+    if (g_current_thread->execution.status == RUNNING)
+    {
+        prev->execution.status = READY;
+    }
+    g_current_thread = next;
+    switch_context(&prev->sp, &next->sp);
+}
+/**
+ * @brief アイドル(何もしない)スレッドの処理
+ * @details 何もしないスレッドであるアイドルスレッドの処理
+ */
+void entry_idle_thread(void)
+{
+    while (1)
+    {
+        // 何もしない（省電力のためにNOPを入れることもある）
+        __asm__ volatile("nop");
+    }
+}
+/**
+ * @brief スレッドのエントリー関数処理
+ * @details スレッドで実施する処理内容
+ */
+void entry_thread(void)
 {
     for (int i = 0; i < 2; i++)
     {
-        printf("%d thread1(sp:0x%x) -> thread2(sp:0x%x) \n", i, g_thread1.sp, g_thread2.sp);
-        switch_context(&g_thread1.sp, &g_thread2.sp);
+        // スレッドの情報
+        printf("thread_start_%d(id:%d sp:0x%x) \n", i, g_current_thread->execution.id, g_current_thread->sp);
+        schedule_threads();
         // スタックのデータを確認
         for (int j = STACK_SIZE; j > 0; j--)
         {
-            if (g_thread1.stack[j - 1] != 0)
+            // スタックのデータが設定されている場合
+            if (g_current_thread->stack[j - 1] != 0)
             {
-                printf("(thread1)sp=0x%x stack%d:0x%x(0x%x)\n", g_thread1.sp, j, g_thread1.stack[j - 1], &g_thread1.stack[j - 1]);
+                printf("(thread%d)sp=0x%x stack%d:0x%x(0x%x)\n",
+                       g_current_thread->execution.id,
+                       g_current_thread->sp,
+                       j,
+                       g_current_thread->stack[j - 1],
+                       &g_current_thread->stack[j - 1]);
             }
         }
         printf("-----------------------------------------\n");
     }
-}
-/**
- * @brief スレッド2のエントリー関数処理
- * @details スレッド2で実施する処理内容
- */
-void entry_thread2(void)
-{
-    for (int i = 0; i < 2; i++)
-    {
-        printf("%d thread2(sp:0x%x) -> thread1(sp:0x%x) \n", i, g_thread2.sp, g_thread1.sp);
-        switch_context(&g_thread2.sp, &g_thread1.sp);
-        // スタックのデータを確認
-        for (int j = STACK_SIZE; j > 0; j--)
-        {
-            if (g_thread2.stack[j - 1] != 0)
-            {
-                printf("(thread2)sp=0x%x stack%d:0x%x(0x%x)\n", g_thread2.sp, j, g_thread2.stack[j - 1], &g_thread2.stack[j - 1]);
-            }
-        }
-        printf("-----------------------------------------\n");
-    }
+    g_current_thread->execution.status = TERMINATED;
 }
 /**
  * @brief カーネルメイン処理
@@ -383,10 +485,20 @@ void kernel_main(void)
     printf("%d\n", 999999);
     printf("%d\n", -999999);
     // スレッドの初期化
-    init_thread(&g_thread1, entry_thread1);
-    init_thread(&g_thread2, entry_thread2);
-    // スレッド1の起動
-    entry_thread1();
+    init_threads();
+    // アイドルスレッドの作成
+    g_idle_thread = create_thread(entry_idle_thread);
+    g_idle_thread->execution.id = 0;
+    g_current_thread = g_idle_thread;
+    // スレッドの生成
+    create_thread(entry_thread);
+    create_thread(entry_thread);
+    // スケジューラの動作
+    printf("thread start\n");
+    while (!are_all_threads_terminated())
+    {
+        schedule_threads();
+    }
     printf("thread finished\n");
     // 無限ループ
     for (;;)
